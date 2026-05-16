@@ -1,0 +1,12 @@
+# Core
+neo4j>=5.22.0,<6.0.0
+openai>=1.40.0
+python-dotenv>=1.0.1
+
+# Ingestion + chunking helpers
+python-frontmatter>=1.1.0
+tiktoken>=0.7.0
+tqdm>=4.66.4
+
+# App layer (for later)
+streamlit>=1.35.0
