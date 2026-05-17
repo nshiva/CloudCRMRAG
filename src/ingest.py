@@ -13,6 +13,8 @@ from src.config import PROJECT_ROOT
 
 @dataclass(frozen=True)
 class DocumentChunk:
+    """Single chunk object used by indexing and retrieval pipelines."""
+
     chunk_id: str
     doc_id: str
     text: str
@@ -20,6 +22,8 @@ class DocumentChunk:
 
 
 def _resolve_docs_path(docs_path: str | Path | None) -> Path:
+    """Resolve docs path from CLI arg, .env, or default dataset location."""
+
     if docs_path is not None:
         resolved = Path(docs_path)
     else:
@@ -36,6 +40,8 @@ def _resolve_docs_path(docs_path: str | Path | None) -> Path:
 
 
 def _parse_markdown(file_path: Path) -> tuple[dict[str, object], str]:
+    """Parse YAML front matter + markdown body from a file."""
+
     raw = file_path.read_text(encoding="utf-8")
 
     if raw.startswith("---"):
@@ -49,6 +55,8 @@ def _parse_markdown(file_path: Path) -> tuple[dict[str, object], str]:
 
 
 def _build_chunk(file_path: Path, docs_root: Path) -> DocumentChunk:
+    """Create one chunk per markdown file with merged metadata."""
+
     metadata, text = _parse_markdown(file_path)
 
     doc_id = str(metadata.get("doc_id") or file_path.stem)
@@ -69,6 +77,8 @@ def _build_chunk(file_path: Path, docs_root: Path) -> DocumentChunk:
 
 
 def load_document_chunks(docs_path: str | Path | None = None) -> list[DocumentChunk]:
+    """Load all markdown files and return one chunk per document."""
+
     docs_root = _resolve_docs_path(docs_path)
     if not docs_root.exists():
         raise FileNotFoundError(f"Docs path does not exist: {docs_root}")
@@ -82,6 +92,8 @@ def load_document_chunks(docs_path: str | Path | None = None) -> list[DocumentCh
 
 
 def _print_preview(chunks: list[DocumentChunk], limit: int) -> None:
+    """Print a compact preview of loaded chunks for quick validation."""
+
     print(f"Loaded {len(chunks)} chunk(s).")
     for chunk in chunks[:limit]:
         print("-" * 72)

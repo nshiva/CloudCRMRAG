@@ -1,53 +1,25 @@
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Iterable
 
-from neo4j import GraphDatabase
 from tqdm import tqdm
 
-from src.config import PROJECT_ROOT, get_settings
+from src.config import get_settings
 from src.ingest import DocumentChunk, load_document_chunks
-
-# Keep Hugging Face cache inside project workspace to avoid home-dir permission issues.
-PROJECT_CACHE = PROJECT_ROOT / ".cache"
-HF_CACHE = PROJECT_CACHE / "huggingface"
-HF_HUB_CACHE = HF_CACHE / "hub"
-os.environ["XDG_CACHE_HOME"] = str(PROJECT_CACHE)
-os.environ["HF_HOME"] = str(HF_CACHE)
-os.environ["HF_HUB_CACHE"] = str(HF_HUB_CACHE)
-os.environ["HUGGINGFACE_HUB_CACHE"] = str(HF_HUB_CACHE)
-os.environ["HF_HUB_DISABLE_XET"] = "1"
-HF_HUB_CACHE.mkdir(parents=True, exist_ok=True)
-
-from sentence_transformers import SentenceTransformer
+from src.runtime import connect_neo4j, get_vector_index_dimension, load_embedding_model
 
 
 def batched(items: list[DocumentChunk], batch_size: int) -> Iterable[list[DocumentChunk]]:
+    """Yield fixed-size chunk batches for embedding and upsert."""
+
     for i in range(0, len(items), batch_size):
         yield items[i : i + batch_size]
 
 
-def connect_neo4j(uri: str, username: str, password: str):
-    candidates = [uri]
-    if uri.startswith("neo4j+s://"):
-        candidates.append("neo4j+ssc://" + uri.split("://", 1)[1])
-
-    last_error = None
-    for candidate in candidates:
-        driver = GraphDatabase.driver(candidate, auth=(username, password))
-        try:
-            driver.verify_connectivity()
-            return driver, candidate
-        except Exception as exc:
-            driver.close()
-            last_error = exc
-
-    raise last_error
-
-
 def ensure_schema(session, index_name: str, embedding_dimension: int) -> None:
+    """Ensure constraints exist and vector index dimension matches current model."""
+
     session.run(
         """
         CREATE CONSTRAINT document_doc_id IF NOT EXISTS
@@ -64,23 +36,35 @@ def ensure_schema(session, index_name: str, embedding_dimension: int) -> None:
         """
     ).consume()
 
-    escaped_index_name = index_name.replace("`", "")
-    vector_query = f"""
-    CREATE VECTOR INDEX `{escaped_index_name}` IF NOT EXISTS
-    FOR (c:Chunk) ON (c.embedding)
-    OPTIONS {{
-      indexConfig: {{
-        `vector.dimensions`: {embedding_dimension},
-        `vector.similarity_function`: 'cosine'
-      }}
-    }}
-    """
-    session.run(vector_query).consume()
+    current_dimension = get_vector_index_dimension(session, index_name)
+    if current_dimension is None:
+        # Create vector index only once; future runs validate dimension compatibility.
+        escaped_index_name = index_name.replace("`", "")
+        vector_query = f"""
+        CREATE VECTOR INDEX `{escaped_index_name}`
+        FOR (c:Chunk) ON (c.embedding)
+        OPTIONS {{
+          indexConfig: {{
+            `vector.dimensions`: {embedding_dimension},
+            `vector.similarity_function`: 'cosine'
+          }}
+        }}
+        """
+        session.run(vector_query).consume()
+        return
+
+    if current_dimension != embedding_dimension:
+        raise ValueError(
+            f"Vector index '{index_name}' dimension is {current_dimension}, "
+            f"but EMBEDDING_DIMENSION is {embedding_dimension}. "
+            f"Drop and recreate index '{index_name}' with the new dimension, "
+            "then re-run indexing."
+        )
 
 
-def create_embeddings(
-    embedding_model: SentenceTransformer, texts: list[str]
-) -> list[list[float]]:
+def create_embeddings(embedding_model, texts: list[str]) -> list[list[float]]:
+    """Create normalized embedding vectors for a batch of chunk texts."""
+
     vectors = embedding_model.encode(
         texts,
         convert_to_numpy=True,
@@ -91,6 +75,8 @@ def create_embeddings(
 
 
 def build_rows(chunks: list[DocumentChunk], embeddings: list[list[float]]) -> list[dict]:
+    """Shape chunk + embedding data into query rows for Neo4j upsert."""
+
     rows: list[dict] = []
     for chunk, embedding in zip(chunks, embeddings, strict=True):
         chunk_metadata = dict(chunk.metadata)
@@ -111,6 +97,8 @@ def build_rows(chunks: list[DocumentChunk], embeddings: list[list[float]]) -> li
 
 
 def upsert_rows(session, rows: list[dict]) -> None:
+    """Upsert Document/Chunk nodes and HAS_CHUNK relationship in one Cypher call."""
+
     session.run(
         """
         UNWIND $rows AS row
@@ -160,10 +148,7 @@ def main() -> None:
     print(f"Loaded {len(chunks)} chunk(s) from {settings.docs_path}")
     print(f"Embedding model: {settings.embedding_model}")
 
-    embedding_model = SentenceTransformer(
-        settings.embedding_model,
-        cache_folder=str(HF_CACHE),
-    )
+    embedding_model = load_embedding_model(settings.embedding_model)
     driver, connected_uri = connect_neo4j(
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,

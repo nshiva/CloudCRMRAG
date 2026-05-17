@@ -9,6 +9,16 @@ from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
+CACHE_DIR = PROJECT_ROOT / ".cache"
+MODEL_CACHE_DIR = CACHE_DIR / "models"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("XDG_CACHE_HOME", str(CACHE_DIR))
+os.environ.setdefault("HF_HOME", str(MODEL_CACHE_DIR))
+os.environ.setdefault(
+    "SENTENCE_TRANSFORMERS_HOME",
+    str(MODEL_CACHE_DIR / "sentence_transformers"),
+)
 
 
 class ConfigError(ValueError):
@@ -17,8 +27,8 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Settings:
-    openai_api_key: str
-    openai_chat_model: str
+    """Runtime configuration shared across ingestion, indexing, and retrieval."""
+
     embedding_model: str
     neo4j_uri: str
     neo4j_username: str
@@ -27,12 +37,12 @@ class Settings:
     docs_path: Path
     vector_index_name: str
     embedding_dimension: int
-    chunk_size: int
-    chunk_overlap: int
     top_k: int
 
 
 def _required_str(name: str) -> str:
+    """Return non-empty env var value or raise ConfigError."""
+
     value = os.getenv(name, "").strip()
     if not value:
         raise ConfigError(f"Missing required environment variable: {name}")
@@ -40,6 +50,8 @@ def _required_str(name: str) -> str:
 
 
 def _optional_str(name: str, default: str = "") -> str:
+    """Return env var value if present, otherwise a default."""
+
     value = os.getenv(name)
     if value is None:
         return default
@@ -50,6 +62,8 @@ def _optional_str(name: str, default: str = "") -> str:
 
 
 def _int_value(name: str, default: int | None = None) -> int:
+    """Parse an integer env var with optional default fallback."""
+
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         if default is None:
@@ -64,6 +78,8 @@ def _int_value(name: str, default: int | None = None) -> int:
 
 
 def _resolve_docs_path(value: str) -> Path:
+    """Resolve docs path relative to project root when needed."""
+
     path = Path(value)
     if not path.is_absolute():
         path = PROJECT_ROOT / path
@@ -72,22 +88,16 @@ def _resolve_docs_path(value: str) -> Path:
 
 @lru_cache(maxsize=1)
 def get_settings(env_file: Path | None = None) -> Settings:
+    """Load and validate app settings from .env and process environment."""
+
     load_dotenv(env_file or DEFAULT_ENV_FILE, override=True)
 
     docs_path = _resolve_docs_path(_required_str("DOCS_PATH"))
     embedding_dimension = _int_value("EMBEDDING_DIMENSION", default=384)
-    chunk_size = _int_value("CHUNK_SIZE", default=1000)
-    chunk_overlap = _int_value("CHUNK_OVERLAP", default=150)
     top_k = _int_value("TOP_K", default=5)
 
     if embedding_dimension <= 0:
         raise ConfigError("EMBEDDING_DIMENSION must be > 0")
-    if chunk_size <= 0:
-        raise ConfigError("CHUNK_SIZE must be > 0")
-    if chunk_overlap < 0:
-        raise ConfigError("CHUNK_OVERLAP must be >= 0")
-    if chunk_overlap >= chunk_size:
-        raise ConfigError("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
     if top_k <= 0:
         raise ConfigError("TOP_K must be > 0")
     if not docs_path.exists():
@@ -96,8 +106,6 @@ def get_settings(env_file: Path | None = None) -> Settings:
         raise ConfigError(f"DOCS_PATH must be a directory: {docs_path}")
 
     return Settings(
-        openai_api_key=_optional_str("OPENAI_API_KEY"),
-        openai_chat_model=_optional_str("OPENAI_CHAT_MODEL", default="gpt-4.1-mini"),
         embedding_model=_optional_str(
             "EMBEDDING_MODEL",
             default="sentence-transformers/all-MiniLM-L6-v2",
@@ -109,7 +117,5 @@ def get_settings(env_file: Path | None = None) -> Settings:
         docs_path=docs_path,
         vector_index_name=_required_str("VECTOR_INDEX_NAME"),
         embedding_dimension=embedding_dimension,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
         top_k=top_k,
     )
