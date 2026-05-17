@@ -176,6 +176,44 @@ def _timestamp_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _format_value(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, float):
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    text = str(value).strip()
+    return text if text else "N/A"
+
+
+def build_eval_parameter_rows(
+    *,
+    embedding_model: str,
+    embedding_dimension: int,
+    top_k: int,
+    llm_provider: str,
+    llm_model: str,
+    llm_base_url: str,
+    llm_temperature: float,
+    llm_top_p: float | None,
+    vector_index_name: str,
+    neo4j_uri_used: str,
+) -> list[dict[str, str]]:
+    """Return display-ready label/value rows for UI rendering."""
+
+    return [
+        {"label": "Embedding Model", "value": _format_value(embedding_model)},
+        {"label": "Embedding Dimension", "value": _format_value(embedding_dimension)},
+        {"label": "Top K", "value": _format_value(top_k)},
+        {"label": "LLM Provider", "value": _format_value(llm_provider)},
+        {"label": "LLM Model", "value": _format_value(llm_model)},
+        {"label": "LLM Base URL", "value": _format_value(llm_base_url)},
+        {"label": "LLM Temperature", "value": _format_value(llm_temperature)},
+        {"label": "LLM Top P", "value": _format_value(llm_top_p)},
+        {"label": "Vector Index", "value": _format_value(vector_index_name)},
+        {"label": "Neo4j URI Used", "value": _format_value(neo4j_uri_used)},
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate retrieval quality using eval/questions.jsonl.")
     parser.add_argument(
@@ -306,6 +344,20 @@ def main() -> None:
 
     aggregate = aggregate_metrics(per_query, top_k=top_k)
 
+    llm_top_p = _optional_float_env("LLM_TOP_P", "OLLAMA_TOP_P")
+    eval_parameter_rows = build_eval_parameter_rows(
+        embedding_model=settings.embedding_model,
+        embedding_dimension=settings.embedding_dimension,
+        top_k=top_k,
+        llm_provider=llm_config.provider,
+        llm_model=llm_config.model,
+        llm_base_url=llm_config.base_url,
+        llm_temperature=llm_config.temperature,
+        llm_top_p=llm_top_p,
+        vector_index_name=settings.vector_index_name,
+        neo4j_uri_used=connected_uri,
+    )
+
     summary = {
         "run": {
             "run_id": run_id,
@@ -329,8 +381,9 @@ def main() -> None:
             "llm_model": llm_config.model,
             "llm_base_url": llm_config.base_url,
             "llm_temperature": llm_config.temperature,
-            "llm_top_p": _optional_float_env("LLM_TOP_P", "OLLAMA_TOP_P"),
+            "llm_top_p": llm_top_p,
         },
+        "ui": {"eval_parameters": eval_parameter_rows},
         "metrics": aggregate,
         "notes": "Retrieval evaluation against expected_sources from eval/questions.jsonl.",
     }
