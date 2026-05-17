@@ -19,7 +19,7 @@ class ConfigError(ValueError):
 class Settings:
     openai_api_key: str
     openai_chat_model: str
-    openai_embedding_model: str
+    embedding_model: str
     neo4j_uri: str
     neo4j_username: str
     neo4j_password: str
@@ -39,8 +39,24 @@ def _required_str(name: str) -> str:
     return value
 
 
-def _int_value(name: str) -> int:
-    value = _required_str(name)
+def _optional_str(name: str, default: str = "") -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
+    if not value:
+        return default
+    return value
+
+
+def _int_value(name: str, default: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        if default is None:
+            raise ConfigError(f"Missing required environment variable: {name}")
+        return default
+
+    value = raw.strip()
     try:
         return int(value)
     except ValueError as exc:
@@ -56,13 +72,13 @@ def _resolve_docs_path(value: str) -> Path:
 
 @lru_cache(maxsize=1)
 def get_settings(env_file: Path | None = None) -> Settings:
-    load_dotenv(env_file or DEFAULT_ENV_FILE, override=False)
+    load_dotenv(env_file or DEFAULT_ENV_FILE, override=True)
 
     docs_path = _resolve_docs_path(_required_str("DOCS_PATH"))
-    embedding_dimension = _int_value("EMBEDDING_DIMENSION")
-    chunk_size = _int_value("CHUNK_SIZE")
-    chunk_overlap = _int_value("CHUNK_OVERLAP")
-    top_k = _int_value("TOP_K")
+    embedding_dimension = _int_value("EMBEDDING_DIMENSION", default=384)
+    chunk_size = _int_value("CHUNK_SIZE", default=1000)
+    chunk_overlap = _int_value("CHUNK_OVERLAP", default=150)
+    top_k = _int_value("TOP_K", default=5)
 
     if embedding_dimension <= 0:
         raise ConfigError("EMBEDDING_DIMENSION must be > 0")
@@ -80,9 +96,12 @@ def get_settings(env_file: Path | None = None) -> Settings:
         raise ConfigError(f"DOCS_PATH must be a directory: {docs_path}")
 
     return Settings(
-        openai_api_key=_required_str("OPENAI_API_KEY"),
-        openai_chat_model=_required_str("OPENAI_CHAT_MODEL"),
-        openai_embedding_model=_required_str("OPENAI_EMBEDDING_MODEL"),
+        openai_api_key=_optional_str("OPENAI_API_KEY"),
+        openai_chat_model=_optional_str("OPENAI_CHAT_MODEL", default="gpt-4.1-mini"),
+        embedding_model=_optional_str(
+            "EMBEDDING_MODEL",
+            default="sentence-transformers/all-MiniLM-L6-v2",
+        ),
         neo4j_uri=_required_str("NEO4J_URI"),
         neo4j_username=_required_str("NEO4J_USERNAME"),
         neo4j_password=_required_str("NEO4J_PASSWORD"),

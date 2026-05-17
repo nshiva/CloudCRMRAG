@@ -4,7 +4,8 @@ openai>=1.40.0
 python-dotenv>=1.0.1
 
 # Ingestion + chunking helpers
-python-frontmatter>=1.1.0
+PyYAML>=6.0.1
+sentence-transformers>=3.0.1
 tiktoken>=0.7.0
 tqdm>=4.66.4
 
